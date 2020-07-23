@@ -1587,6 +1587,7 @@ public class SlaveTemplate implements Describable<SlaveTemplate> {
             .withAmiType(amiType)
             .withConnectionStrategy(connectionStrategy)
             .withMaxTotalUses(maxTotalUses)
+            .withRestartSpotInterruption(spotConfig.getRestartSpotInterruption())
             .build();
         return EC2AgentFactory.getInstance().createSpotAgent(config);
     }
