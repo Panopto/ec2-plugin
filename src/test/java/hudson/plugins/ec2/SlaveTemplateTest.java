@@ -60,6 +60,7 @@ import org.jvnet.hudson.test.Issue;
 import org.jvnet.hudson.test.JenkinsRule;
 import org.mockito.ArgumentCaptor;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -182,6 +183,65 @@ public class SlaveTemplateTest {
         r.assertEqualBeans(orig, received, "ami,zone,spotConfig,description,remoteFS,type,jvmopts,stopOnTerminate,securityGroups,subnetId,tags,usePrivateDnsName");
     }
 
+     * Test to make sure the slave created has been configured properly with the restart spot interruption configuration
+     * correctly set
+     * @throws Exception - Exception that can be thrown by the Jenkins test harness
+     */
+    @Test
+    public void testRestartSpotInterruption() throws Exception {
+        String ami = "ami1";
+        String description = "foo ami";
+
+        EC2Tag tag1 = new EC2Tag("name1", "value1");
+        EC2Tag tag2 = new EC2Tag("name2", "value2");
+        List<EC2Tag> tags = new ArrayList<EC2Tag>();
+        tags.add(tag1);
+        tags.add(tag2);
+
+        SpotConfiguration spotConfig = new SpotConfiguration(true);
+        spotConfig.setSpotMaxBidPrice("0.1");
+        spotConfig.setFallbackToOndemand(true);
+        spotConfig.setSpotBlockReservationDuration(0);
+        spotConfig.setRestartSpotInterruption(true);
+
+        SlaveTemplate slaveTemplate = new SlaveTemplate(ami, EC2AbstractSlave.TEST_ZONE, spotConfig, "default", "foo", InstanceType.M1Large, false, "ttt", Node.Mode.NORMAL, "foo ami", "bar", "bbb", "aaa", "10", "fff", null, "-Xmx1g", false, "subnet 456", tags, null, true, null, "", false, false, "", false, "");
+        List<SlaveTemplate> templates = new ArrayList<>();
+        templates.add(slaveTemplate);
+
+        AmazonEC2Cloud ac = new AmazonEC2Cloud("us-east-1", false, "abc", "us-east-1", "ghi", "3", templates, null, null);
+        r.jenkins.clouds.add(ac);
+        // TODO - find out how to mock the spot interruption event
+        // https://help.spot.io/spotinst-api/elastigroup/amazon-web-services/simulate-instance-interruption/
+        SlaveTemplate received = ((EC2Cloud) r.jenkins.clouds.iterator().next()).getTemplate(description);
+        r.assertEqualBeans(slaveTemplate, received, "ami,zone,spotConfig,description,remoteFS,type,jvmopts,stopOnTerminate,securityGroups,subnetId,tags,connectionStrategy,hostKeyVerificationStrategy");
+    }
+
+    @Test
+    public void ensureTaskRestartedSpotInterruption() throws Exception {
+
+        String ami = "ami1";
+        String description = "foo ami";
+
+        EC2Tag tag1 = new EC2Tag("name1", "value1");
+        EC2Tag tag2 = new EC2Tag("name2", "value2");
+        List<EC2Tag> tags = new ArrayList<EC2Tag>();
+        tags.add(tag1);
+        tags.add(tag2);
+
+        SpotConfiguration spotConfig = new SpotConfiguration(true);
+        spotConfig.setSpotMaxBidPrice("0.1");
+        spotConfig.setFallbackToOndemand(true);
+        spotConfig.setSpotBlockReservationDuration(0);
+        spotConfig.setRestartSpotInterruption(true);
+
+        SlaveTemplate slaveTemplate = new SlaveTemplate(ami, EC2AbstractSlave.TEST_ZONE, spotConfig, "default", "foo", InstanceType.M1Large, false, "ttt", Node.Mode.NORMAL, "foo ami", "bar", "bbb", "aaa", "10", "fff", null, "-Xmx1g", false, "subnet 456", tags, null, true, null, "", false, false, "", false, "");
+        AmazonEC2 mockedEC2 = setupTestForProvisioning(slaveTemplate);
+        // TODO - mock a disconnection
+        RequestSpotInstancesRequest request = mock(RequestSpotInstancesRequest.class);
+        mockedEC2.requestSpotInstances(request);
+    }
+
+    /**
     @Test
     public void testWindowsConfigRoundTrip() throws Exception {
         String ami = "ami1";
