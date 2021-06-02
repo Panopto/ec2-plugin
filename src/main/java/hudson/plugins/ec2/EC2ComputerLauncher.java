@@ -27,8 +27,10 @@ import com.amazonaws.services.ec2.model.SpotInstanceRequest;
 import hudson.model.Action;
 import hudson.model.Actionable;
 import hudson.model.Executor;
+import hudson.model.ParametersAction;
 import hudson.model.Queue;
 import hudson.model.Result;
+import hudson.model.Run;
 import hudson.model.Slave;
 import hudson.model.TaskListener;
 import hudson.slaves.ComputerLauncher;
@@ -44,6 +46,10 @@ import java.util.logging.Logger;
 
 import com.amazonaws.AmazonClientException;
 import jenkins.model.CauseOfInterruption;
+import jenkins.scm.api.SCMRevisionAction;
+import org.jenkinsci.plugins.workflow.job.WorkflowJob;
+import org.jenkinsci.plugins.workflow.job.WorkflowRun;
+import org.jenkinsci.plugins.workflow.support.steps.ExecutorStepExecution;
 
 import javax.annotation.Nonnull;
 
@@ -119,7 +125,8 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
                 String code = spotRequest.getStatus().getCode();
                 // list of status codes - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html#spot-instance-bid-status-understand
                 if (code.equals("instance-stopped-by-price") || code.equals("instance-stopped-no-capacity") ||
-                        code.equals("instance-terminated-by-price") || code.equals("instance-terminated-no-capacity")) {
+                        code.equals("instance-terminated-by-price") || code.equals("instance-terminated-no-capacity") ||
+                        code.equals("request-canceled-and-instance-running") || code.equals("instance-terminated-by-user")) {
                     LOGGER.log(Level.INFO, String.format("Node %s was terminated due to spot interruption. Retriggering " +
                             "job", node.getNodeName()));
                     List<Executor> executors = computer.getExecutors();
@@ -133,6 +140,17 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
                             List<Action> actions = new ArrayList<>();
                             if (currentExecutable instanceof Actionable) {
                                 actions = ((Actionable) currentExecutable).getActions(Action.class);
+                            }
+                            else if (task instanceof WorkflowJob) {
+                                Run<?,?> runForDisplay = ((ExecutorStepExecution.PlaceholderTask) subTask).runForDisplay();
+                                if (runForDisplay != null) {
+                                    Integer buildNumber = runForDisplay.getNumber();
+                                    WorkflowRun failedBuild = (WorkflowRun) ((WorkflowJob) task).getBuildByNumber(buildNumber);
+                                    if (failedBuild != null) {
+                                        actions.addAll(failedBuild.getActions(ParametersAction.class));
+                                        actions.addAll(failedBuild.getActions(SCMRevisionAction.class));
+                                    }
+                                }
                             }
                             LOGGER.log(Level.INFO, String.format("Spot instance for node %s was terminated. " +
                                     "Resubmitting task %s with actions %s", node.getNodeName(), task, actions));
