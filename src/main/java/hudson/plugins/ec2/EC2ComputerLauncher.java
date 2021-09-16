@@ -23,7 +23,6 @@
  */
 package hudson.plugins.ec2;
 
-import com.amazonaws.services.ec2.model.SpotInstanceRequest;
 import hudson.model.Action;
 import hudson.model.Actionable;
 import hudson.model.Executor;
@@ -34,7 +33,6 @@ import hudson.model.Run;
 import hudson.model.Slave;
 import hudson.model.TaskListener;
 import hudson.slaves.ComputerLauncher;
-import hudson.slaves.OfflineCause;
 import hudson.slaves.SlaveComputer;
 import hudson.model.queue.SubTask;
 
@@ -98,9 +96,9 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
 
     /**
      * This method is called after a node disconnects. See {@link ComputerLauncher#afterDisconnect(SlaveComputer, TaskListener)}
-     * This method is overriden to perform a check to see if the node that is disconnected is a spot instance and
-     * whether the disconnection is a spot interruption event. If it is a spot interruption event, the tasks that the
-     * node was processing will be resubmitted if a user selects the option to do so.
+     * This method is overriden to perform a check to see if the node that is disconnected is a spot instance.
+     * If it is a spot instance, the tasks that the node was processing will be resubmitted if a user selects
+     * the option to do so.
      * @param computer
      * @param listener
      */
@@ -112,50 +110,36 @@ public abstract class EC2ComputerLauncher extends ComputerLauncher {
         if (node instanceof EC2SpotSlave) {
 
             // checking if its an unexpected disconnection
-            final boolean isUnexpectedDisconnection = computer.isOffline() && computer.getOfflineCause()
-                    instanceof OfflineCause.ChannelTermination;
             boolean shouldRestart = ((EC2SpotSlave) node).getRestartSpotInterruption();
-            if (isUnexpectedDisconnection && shouldRestart) {
-                SpotInstanceRequest spotRequest = ((EC2SpotSlave) node).getSpotRequest();
-                if (spotRequest == null) {
-                    LOGGER.log(Level.WARNING, String.format("Could not get spot request for spot instance node %s",
-                            node.getNodeName()));
-                    return;
-                }
-                String code = spotRequest.getStatus().getCode();
-                // list of status codes - https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-bid-status.html#spot-instance-bid-status-understand
-                if (code.equals("instance-stopped-by-price") || code.equals("instance-stopped-no-capacity") ||
-                        code.equals("instance-terminated-by-price") || code.equals("instance-terminated-no-capacity") ||
-                        code.equals("request-canceled-and-instance-running") || code.equals("instance-terminated-by-user")) {
-                    LOGGER.log(Level.INFO, String.format("Node %s was terminated due to spot interruption. Retriggering " +
-                            "job", node.getNodeName()));
-                    List<Executor> executors = computer.getExecutors();
-                    for (Executor executor : executors) {
-                        Queue.Executable currentExecutable = executor.getCurrentExecutable();
-                        if (currentExecutable !=null) {  // interrupting all executables
-                            executor.interrupt(Result.ABORTED, new EC2SpotInterruptedCause(node.getNodeName()));
-                            SubTask subTask = currentExecutable.getParent();
-                            Queue.Task task = subTask.getOwnerTask();
-                            // Get actions (if any)
-                            List<Action> actions = new ArrayList<>();
-                            if (currentExecutable instanceof Actionable) {
-                                actions = ((Actionable) currentExecutable).getActions(Action.class);
-                            }
-                            else if (task instanceof WorkflowJob) {
-                                Run<?,?> runForDisplay = ((ExecutorStepExecution.PlaceholderTask) subTask).runForDisplay();
-                                if (runForDisplay != null) {
-                                    Integer buildNumber = runForDisplay.getNumber();
-                                    WorkflowRun failedBuild = (WorkflowRun) ((WorkflowJob) task).getBuildByNumber(buildNumber);
-                                    if (failedBuild != null) {
-                                        actions.addAll(failedBuild.getActions(ParametersAction.class));
-                                        actions.addAll(failedBuild.getActions(SCMRevisionAction.class));
-                                    }
+            if (computer.isOffline() && shouldRestart) {
+                // It's too hard to perfectly determine if a spot yank is the reason for losing an agent
+                // So instead we assume any job running on a node that disconnects should be restarted
+                List<Executor> executors = computer.getExecutors();
+                for (Executor executor : executors) {
+                    Queue.Executable currentExecutable = executor.getCurrentExecutable();
+                    if (currentExecutable !=null) {  // interrupting all executables
+                        executor.interrupt(Result.ABORTED, new EC2SpotInterruptedCause(node.getNodeName()));
+                        SubTask subTask = currentExecutable.getParent();
+                        Queue.Task task = subTask.getOwnerTask();
+                        // Get actions (if any)
+                        List<Action> actions = new ArrayList<>();
+                        if (currentExecutable instanceof Actionable) {
+                            actions = ((Actionable) currentExecutable).getActions(Action.class);
+                        }
+                        else if (task instanceof WorkflowJob) {
+                            Run<?,?> runForDisplay = ((ExecutorStepExecution.PlaceholderTask) subTask).runForDisplay();
+                            if (runForDisplay != null) {
+                                Integer buildNumber = runForDisplay.getNumber();
+                                WorkflowRun failedBuild = (WorkflowRun) ((WorkflowJob) task).getBuildByNumber(buildNumber);
+                                if (failedBuild != null) {
+                                    actions.addAll(failedBuild.getActions(ParametersAction.class));
+                                    actions.addAll(failedBuild.getActions(SCMRevisionAction.class));
                                 }
                             }
-                            LOGGER.log(Level.INFO, String.format("Spot instance for node %s was terminated. " +
-                                    "Resubmitting task %s with actions %s", node.getNodeName(), task, actions));
-                            Queue.getInstance().schedule2(task, 10, actions);
                         }
+                        LOGGER.log(Level.INFO, String.format("Spot instance for node %s was terminated. " +
+                                "Resubmitting task %s with actions %s", node.getNodeName(), task, actions));
+                        Queue.getInstance().schedule2(task, 10, actions);
                     }
                 }
             }
